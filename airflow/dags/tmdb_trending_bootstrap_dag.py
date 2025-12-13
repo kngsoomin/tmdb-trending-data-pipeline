@@ -28,8 +28,14 @@ with DAG(
         sql="raw/01_create_raw_layer.sql",
     )
 
-    create_dw_tables = SnowflakeOperator(
-        task_id="create_dw_tables",
+    create_stg_layer = SnowflakeOperator(
+        task_id="create_stg_layer",
+        snowflake_conn_id=DEFAULT_CONN_ID,
+        sql="stg/01_create_stg_table.sql",
+    )
+
+    create_dw_layer = SnowflakeOperator(
+        task_id="create_dw_layer",
         snowflake_conn_id=DEFAULT_CONN_ID,
         sql="dw/01_create_dw_tables.sql",
     )
@@ -40,4 +46,4 @@ with DAG(
         sql="dw/02_create_pipeline_metrics.sql",
     )
 
-    create_raw_layer >> create_dw_tables >> create_pipeline_metrics
+    create_raw_layer >> create_stg_layer >> create_dw_layer >> create_pipeline_metrics

@@ -32,12 +32,18 @@ flowchart LR
     TMDB[TMDB Trending API]
 
     subgraph Airflow["Apache Airflow"]
-        FETCH[Fetch Trending Snapshot]
-        LOAD_RAW[Load RAW JSON]
-        STG_BUILD[Build STG Tables]
-        DQ[Data Quality Checks]
-        MERGE_DW[Merge into DW]
-        METRICS[Log Pipeline Metrics]
+        subgraph BOOT["Bootstrap DAG (one-time)"]
+            BOOT_DDL[Create Snowflake Objects (RAW/STG/DW)]
+        end
+
+        subgraph PIPE["Pipeline DAG (daily)"]
+            FETCH[Fetch Trending Snapshot]
+            LOAD_RAW[Load RAW JSON (PUT + COPY)]
+            STG_POP[Build STG Rows (DELETE + INSERT)]
+            DQ[Data Quality Checks]
+            MERGE_DW[Merge into DW]
+            METRICS[Log Pipeline Metrics]
+        end
     end
 
     subgraph Snowflake["Snowflake"]
@@ -48,12 +54,20 @@ flowchart LR
         METRIC_TBL[(DW\nPIPELINE_METRICS)]
     end
 
+    %% Bootstrap
+    BOOT_DDL --> RAW
+    BOOT_DDL --> STG
+    BOOT_DDL --> DIM
+    BOOT_DDL --> FACT
+    BOOT_DDL --> METRIC_TBL
+
+    %% Daily pipeline
     TMDB --> FETCH
     FETCH --> LOAD_RAW
     LOAD_RAW --> RAW
 
-    RAW --> STG_BUILD
-    STG_BUILD --> STG
+    RAW --> STG_POP
+    STG_POP --> STG
     STG --> DQ
 
     STG --> MERGE_DW
@@ -61,12 +75,18 @@ flowchart LR
     MERGE_DW --> FACT
 
     LOAD_RAW --> METRICS
-    STG_BUILD --> METRICS
+    STG_POP --> METRICS
     MERGE_DW --> METRICS
     METRICS --> METRIC_TBL
+
 ```
 
 The pipeline is orchestrated by Airflow and follows a layered **RAW → STG → DW** design in Snowflake, with built-in data quality checks and operational metrics to ensure correctness and observability.
+
+<img src="https://github.com/kngsoomin/tmdb-trending-data-pipeline/blob/30b4eea0fe1b2f25efc3e025f8f7798247d42d6b/dag_graph_view.png"
+     width="120" />
+
+> Airflow DAG with layered TaskGroups (RAW → STG → DW) and metric logging tasks
 
 ---
 
@@ -225,4 +245,5 @@ Run tests locally:
 ```bash
 make test
 ```
+
 # tmdb-trending-data-pipeline

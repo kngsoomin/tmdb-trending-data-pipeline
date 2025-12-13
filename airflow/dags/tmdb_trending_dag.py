@@ -77,10 +77,10 @@ with DAG(
     # ---------------------------
     with TaskGroup(group_id="stg_layer") as stg_layer:
 
-        create_stage_temp = SnowflakeOperator(
-            task_id="create_stage_temp",
+        build_stg_trending = SnowflakeOperator(
+            task_id="build_stg_trending",
             snowflake_conn_id=DEFAULT_CONN_ID,
-            sql="stg/01_create_stage_temp_trending.sql",
+            sql="stg/02_build_stg_trending.sql",
         )
 
         dq_checks = SnowflakeOperator(
@@ -99,7 +99,7 @@ with DAG(
             },
         )
 
-        create_stage_temp >> dq_checks >> log_stg_metrics
+        build_stg_trending >> dq_checks >> log_stg_metrics
 
     # ---------------------------
     # DW layer TaskGroup
