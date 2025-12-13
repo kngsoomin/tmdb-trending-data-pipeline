@@ -79,6 +79,8 @@ flowchart LR
 
 The pipeline is orchestrated by Airflow and follows a layered **RAW → STG → DW** design in Snowflake, with built-in data quality checks and operational metrics to ensure correctness and observability.
 
+<img src="https://github.com/kngsoomin/tmdb-trending-data-pipeline/blob/5bd9d831365d5de75aa0329347843ea5e63f5342/dag_graph_view.png" width="120">
+
 > Airflow DAG with layered TaskGroups (RAW → STG → DW) and metric logging tasks
 
 ## Data Flow
