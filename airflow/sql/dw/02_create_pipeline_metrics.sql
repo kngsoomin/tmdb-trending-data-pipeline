@@ -1,0 +1,14 @@
+-- For pipeline observability
+
+CREATE TABLE IF NOT EXISTS DEV.DW.PIPELINE_METRICS (
+    PIPELINE_DATE    DATE          NOT NULL,
+    DAG_ID           STRING        NOT NULL,
+    TASK_ID          STRING        NOT NULL,
+    STEP_NAME        STRING        NOT NULL,
+    ROW_COUNT        NUMBER,
+    START_TS         TIMESTAMP_LTZ,
+    END_TS           TIMESTAMP_LTZ,
+    STATUS           STRING,   -- 'SUCCESS' | 'FAILED'
+    EXTRA_INFO       VARIANT,
+    CREATED_AT       TIMESTAMP_LTZ DEFAULT CURRENT_TIMESTAMP
+);
