@@ -12,8 +12,6 @@ layered transformations, and idempotent delivery.
 The resulting dataset captures daily popularity snapshots of content
 and supports trend and time-series analysis.
 
----
-
 ## Design Focus
 
 This pipeline was built with real-world production considerations in mind:
@@ -23,8 +21,6 @@ This pipeline was built with real-world production considerations in mind:
 - Clear separation of RAW, STG, and DW layers
 - Built-in data quality checks and operational metrics for better observability
 
----
-
 ## Architecture
 
 ```mermaid
@@ -33,13 +29,13 @@ flowchart LR
 
     subgraph Airflow["Apache Airflow"]
         subgraph BOOT["Bootstrap DAG (one-time)"]
-            BOOT_DDL[Create Snowflake Objects (RAW/STG/DW)]
+            BOOT_DDL["Create Snowflake Objects (RAW, STG, DW)"]
         end
 
         subgraph PIPE["Pipeline DAG (daily)"]
             FETCH[Fetch Trending Snapshot]
-            LOAD_RAW[Load RAW JSON (PUT + COPY)]
-            STG_POP[Build STG Rows (DELETE + INSERT)]
+            LOAD_RAW["Load RAW JSON (PUT and COPY)"]
+            STG_POP["Build STG Rows (DELETE then INSERT)"]
             DQ[Data Quality Checks]
             MERGE_DW[Merge into DW]
             METRICS[Log Pipeline Metrics]
@@ -47,11 +43,11 @@ flowchart LR
     end
 
     subgraph Snowflake["Snowflake"]
-        RAW[(RAW\nTMDB_TRENDING_RAW)]
-        STG[(STG\nTMDB_TRENDING_STG)]
-        DIM[(DW\nDIM_CONTENT)]
-        FACT[(DW\nFACT_TRENDING)]
-        METRIC_TBL[(DW\nPIPELINE_METRICS)]
+        RAW[(RAW.TMDB_TRENDING_RAW)]
+        STG[(STG.TMDB_TRENDING_STG)]
+        DIM[(DW.DIM_CONTENT)]
+        FACT[(DW.FACT_TRENDING)]
+        METRIC_TBL[(DW.PIPELINE_METRICS)]
     end
 
     %% Bootstrap
@@ -69,8 +65,8 @@ flowchart LR
     RAW --> STG_POP
     STG_POP --> STG
     STG --> DQ
+    DQ --> MERGE_DW
 
-    STG --> MERGE_DW
     MERGE_DW --> DIM
     MERGE_DW --> FACT
 
@@ -83,12 +79,7 @@ flowchart LR
 
 The pipeline is orchestrated by Airflow and follows a layered **RAW → STG → DW** design in Snowflake, with built-in data quality checks and operational metrics to ensure correctness and observability.
 
-<img src="https://github.com/kngsoomin/tmdb-trending-data-pipeline/blob/30b4eea0fe1b2f25efc3e025f8f7798247d42d6b/dag_graph_view.png"
-     width="120" />
-
 > Airflow DAG with layered TaskGroups (RAW → STG → DW) and metric logging tasks
-
----
 
 ## Data Flow
 
@@ -109,8 +100,6 @@ The pipeline is orchestrated by Airflow and follows a layered **RAW → STG → 
 
 - Upserts content metadata into a dimension table
 - Maintains historical popularity metrics in a fact table
-
----
 
 ## Data Model
 
@@ -135,8 +124,6 @@ Represents a cleaned, flattened view of the raw payload.
 - `DIM_CONTENT` stores stable metadata for movies and TV shows
 - `FACT_TRENDING` stores daily popularity metrics for analytics and trend analysis
 
----
-
 ## Orchestration & Reliability
 
 - Tasks are grouped by data layer (RAW / STG / DW)
@@ -151,29 +138,40 @@ Each layer logs row counts and execution metadata into a metrics table, allowing
 - Monitoring of volume changes over time
 - Easier debugging during pipeline failures
 
----
-
 ## Backfill & Idempotency
 
 ### API Backfill Constraint
 
-The TMDB Trending API only provides the current popularity snapshot.
-Historical snapshots cannot be retrieved.
+TMDB Trending API exposes **only the current popularity snapshot** and does not support historical queries.
 
-To prevent incorrect data:
+#### Design decision
 
-- API ingestion is skipped for historical logical dates
-- Downstream backfills are supported from existing RAW snapshots (RAW → STG → DW)
+- API ingestion is **explicitly skipped** for historical logical dates
+- This prevents writing incorrect or misleading historical data
 
-## Idempotent Loads
+#### Implication
 
-- Date-partitioned ingestion
-- Deterministic transformations
-- MERGE-based upserts in the DW layer
+- True API-level backfills are not possible
+- Historical reprocessing is limited to data already captured in the RAW layer
 
-Re-running the pipeline for the same date does not create duplicates.
+### Controlled Backfills
 
----
+While the API cannot be backfilled, the pipeline still supports safe downstream reprocessing:
+
+- STG and DW layers can be re-built from existing RAW snapshots
+- Backfills are supported for RAW → STG → DW
+- Because raw API responses are preserved as immutable snapshots, downstream STG and DW layers can be safely reprocessed.
+  This allows schema evolution, transformation logic fixes, and data quality improvements to be applied retroactively without re-calling the external API.
+
+### Idempotent Data Delivery
+
+To ensure safe re-runs and operational stability:
+
+- Data is partitioned by logical date
+- Transformations are deterministic
+- DW tables use `MERGE`-based upserts
+
+As a result, re-running the pipeline for the same date does not create duplicates and produces consistent results.
 
 ## How to Run
 
@@ -228,8 +226,6 @@ Enable and trigger:
 ```bash
 tmdb_trending_pipeline
 ```
-
----
 
 ## Testing
 
