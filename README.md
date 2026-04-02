@@ -1,6 +1,13 @@
-# 🎥 TMDB Trending Data Pipeline (Snowflake + Airflow)
+# 🎥 TMDB Trending Data Pipeline (Snowflake + Airflow + dbt)
 
 **Tech Stack:** Python · Apache Airflow · Snowflake · Docker · TMDB API
+
+## Project Phases
+
+| Phase   | Description                                                          | Data Sources                             | Processing                                 | Key Focus                                                             |
+| ------- | -------------------------------------------------------------------- | ---------------------------------------- | ------------------------------------------ | --------------------------------------------------------------------- |
+| Phase 1 | Batch ETL pipeline for ingesting and transforming TMDB trending data | TMDB Trending API                        | Airflow + SQL                              | Pipeline orchestration, idempotent loads, medallion-style layering    |
+| Phase 2 | Multi-source analytics platform with modular data modeling using dbt | TMDB (Trending, Details, Credits) + IMDb | Airflow (ingestion) + dbt (transformation) | Analytics engineering, dimensional modeling, data contracts & testing |
 
 ## Overview
 
