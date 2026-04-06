@@ -1,4 +1,4 @@
-# TMDB Trending Data Pipeline (Airflow + Snowflake + dbt)
+# TMDB Trending Data Pipeline
 
 This project builds a reproducible data pipeline that ingests trending content from the TMDB API, stores immutable raw snapshots in S3, and transforms them into analytical datasets in Snowflake using dbt.
 
