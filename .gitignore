@@ -7,19 +7,19 @@ __pycache__/
 .eggs/
 .envrc
 
-
 # Virtual environments
 venv/
 .venv/
 env/
 
+# temp data
+data/
 
 # Pytest / coverage
 .pytest_cache/
 .coverage
 htmlcov/
 coverage.xml
-
 
 # Airflow
 airflow.db
@@ -30,18 +30,19 @@ webserver_config.py
 logs/
 logs/**
 
-
 # Docker
 *.pid
 docker-compose.override.yml
 
-
 # Environment variables
 .env
-
 
 # OS / Editor
 .DS_Store
 .idea/
 .vscode/
 *.swp
+
+# dbt
+target/
+dbt_packages/

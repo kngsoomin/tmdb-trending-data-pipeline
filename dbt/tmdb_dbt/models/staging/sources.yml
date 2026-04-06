@@ -1,0 +1,31 @@
+version: 2
+
+sources:
+  - name: raw
+    database: DEV
+    schema: RAW
+    tables:
+      - name: tmdb_trending_raw
+        description: Raw TMDB trending payload loaded by Airflow
+        columns:
+          - name: media_type
+          - name: time_window
+          - name: payload
+          - name: snapshot_date
+          - name: load_ts
+
+      - name: tmdb_details_raw
+        description: Raw TMDB details payload loaded for content enrichment
+        columns:
+          - name: tmdb_id
+          - name: media_type
+          - name: payload
+          - name: load_ts
+
+      - name: tmdb_credits_raw
+        description: Raw TMDB credits payload loaded for content enrichment
+        columns:
+          - name: tmdb_id
+          - name: media_type
+          - name: payload
+          - name: load_ts
