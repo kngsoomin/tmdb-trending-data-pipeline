@@ -18,6 +18,7 @@ The pipeline is composed of three main components: Airflow for orchestration, S3
 
 Airflow runs as a stateful orchestrator, managing scheduling, execution state, retries, and dependency resolution across the pipeline. It coordinates ingestion, replay logic, raw data loading, and triggers downstream transformation jobs.
 
+
 dbt is executed in a separate, stateless container and is invoked only when transformations are required. This keeps transformation logic isolated from orchestration concerns and avoids coupling dbt dependencies to the Airflow runtime.
 
 S3 stores immutable raw snapshots and serves as the source of truth for replay, while Snowflake acts as the analytical warehouse where data is transformed via dbt.
