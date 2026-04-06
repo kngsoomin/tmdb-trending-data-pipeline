@@ -1,116 +1,217 @@
-# TMDB Trending Data Pipeline
+# Reproducible Analytics on a Non-Replayable API
 
-This project builds a reproducible data pipeline that ingests trending content from the TMDB API, stores immutable raw snapshots in S3, and transforms them into analytical datasets in Snowflake using dbt.
+## Overview
 
-Because the TMDB API does not provide historical snapshots for past dates, the pipeline uses S3 as the source of truth to ensure reproducibility.
+Most public APIs do not provide historical snapshots, making reproducible analytics difficult.
 
-It also supports **multi-source enrichment** by incrementally fetching additional datasets (details, credits) while minimizing unnecessary API calls.
+The TMDB trending API only returns the current result for a given time window, which makes backfills and reruns unreliable. Once the data changes, the same request may no longer return the same result.
 
-The design emphasizes reproducibility, idempotent ingestion, and clear separation between orchestration and transformation.
+This project starts with that question:
+
+**How do you build a reliable and reproducible data pipeline on top of a non-replayable API?**
+
+One practical answer is to shift the source of truth away from the API.
+
+Instead of relying on the API to reproduce past results, the pipeline persists immutable raw snapshots in S3 and uses them as the replayable source of truth. This ensures that every run can be reproduced from stored data rather than depending on the external API.
+
+To make this design work in practice, the system enforces three constraints:
+
+- **Reproducibility** — all analytical results must be derived from persisted raw data, not live API responses  
+- **Incremental enrichment** — additional data is fetched only for previously unseen entities to avoid unnecessary API calls  
+- **Separation of concerns** — orchestration (Airflow) and transformation (dbt) are decoupled to keep the system maintainable
 
 
 ## Architecture
 ![Architecture Overview](docs/architecture_overview.png)
 
-The pipeline is composed of three main components: **Airflow for orchestration**, **S3 for raw data storage**, and **Snowflake for analytical processing**, with **dbt handling transformations** within the warehouse.
+The system is designed to make reproducible analytics possible despite a non-replayable upstream API.
 
-Airflow runs as **a stateful orchestrator**, managing scheduling, execution state, retries, and dependency resolution across the pipeline. It coordinates ingestion, replay logic, raw data loading, and triggers downstream transformation jobs.
+To achieve this, the pipeline separates storage, orchestration, and transformation into independent components:
+
+- **S3** stores immutable raw API snapshots and serves as the replayable source of truth  
+- **Airflow** orchestrates ingestion, replay decisions, enrichment, and downstream execution  
+- **Snowflake** acts as the analytical warehouse  
+- **dbt** handles transformation and data quality within the warehouse  
+
+A key design choice is the strict separation between orchestration and transformation.
+
+Airflow operates as a **stateful orchestrator**, managing scheduling, retries, and execution state, while dbt runs in a **separate, stateless container** and is invoked only when transformations are required.
+
+This prevents tight coupling between pipeline control logic and transformation logic, making the system easier to reason about and evolve independently.
+
+Overall, the architecture is intentionally structured so that **data reproducibility is guaranteed by storage (S3), not by the external API**.
 
 
-dbt is executed in **a separate, stateless container** and is invoked only when transformations are required. This keeps transformation logic isolated from orchestration concerns and avoids coupling dbt dependencies to the Airflow runtime.
-
-S3 stores immutable raw snapshots and serves as the source of truth for replay, while Snowflake acts as the analytical warehouse where data is transformed via dbt.
-
-This architecture enforces clear separation of concerns between orchestration, transformation, and storage, ensuring reproducibility, operational simplicity, and independent evolution of each component.
-
-
-## Data Flow
+## Replay-Aware Data Flow
 ![Data Fow](docs/dataflow.png)
 
-The pipeline is orchestrated by Airflow and starts by checking whether a raw snapshot for the current `logical_date` already exists in S3.
+The pipeline is built around a replay-aware ingestion strategy to compensate for the lack of historical access in the TMDB API.
 
-This replay step is required because the **TMDB trending API does not provide historical snapshots for past dates.**
+Each run begins by checking whether a raw snapshot exists in S3 for the given `logical_date`.
 
-The flow therefore follows three possible paths:
+This leads to three possible execution paths:
 
-- If a raw snapshot already exists in S3, the pipeline reuses that snapshot and loads it into Snowflake.
-- If no snapshot exists and the `logical_date` is today, the pipeline fetches fresh trending data from the TMDB API, stores the raw payload in S3, and then loads it into Snowflake.
-- If no snapshot exists and the `logical_date` is in the past, the pipeline fails. Reproduction is only possible when a raw snapshot already exists in S3, which is treated as the source of truth.
+- **Snapshot exists in S3**  
+  The pipeline reuses the stored raw data and loads it into Snowflake.
 
-After the trending data is loaded, the pipeline extracts `tmdb_id` values and performs enrichment by fetching additional datasets such as details and credits.
+- **Snapshot does not exist and `logical_date` is today**  
+  The pipeline fetches fresh data from the TMDB API, persists it in S3, and then loads it into Snowflake.
 
-Only IDs not already present in S3 are fetched, ensuring incremental enrichment while minimizing API usage.
+- **Snapshot does not exist and `logical_date` is in the past**  
+  The pipeline fails.
 
-Finally, dbt transforms the raw data in Snowflake into structured analytical models across the staging, intermediate, and mart layers, and applies tests to validate model integrity.
+This fail-fast behavior is intentional: the system prioritizes reproducibility over silently reconstructing past data from a non-deterministic upstream source.
+
+Once trending data is loaded, the pipeline extracts `tmdb_id` values and performs incremental enrichment:
+
+- Additional datasets (details, credits) are fetched only for IDs not already present in S3  
+- This avoids redundant API calls and ensures efficient data expansion  
+
+Finally, dbt transforms the data in Snowflake into structured analytical models (staging → intermediate → marts) and applies tests to validate model integrity.
 
 
 ## Data Modeling & Transformation
 ![Data Lineage](docs/data-lineage.png)
 
-Transformations are implemented using dbt within Snowflake, following a layered modeling approach: **staging → intermediate → marts**.
+Raw data from the TMDB API is semi-structured, fragmented across multiple endpoints, and not immediately suitable for analysis.
 
-dbt transformations are triggered by Airflow only after all required raw datasets have been successfully loaded into Snowflake. This ensures that transformations always run on a complete and consistent set of inputs.
+To make this data usable, the pipeline applies a layered transformation strategy in Snowflake using dbt.
 
-### Staging Layer
+Transformations are executed only after all required raw datasets are fully loaded, ensuring that downstream models are built on a complete and consistent snapshot of data.
 
-The staging layer standardizes raw data loaded from Snowflake RAW tables.
+The modeling approach follows three layers:
 
-- Flattens semi-structured JSON fields from TMDB API responses
-- Renames and casts columns into consistent formats
-- Applies basic data quality checks (e.g., not null, accepted values)
+### Staging Layer — Standardize raw API data
 
-Each source dataset (trending, details, credits) is transformed into its own staging model.
+The staging layer converts raw JSON payloads into structured, analysis-friendly tables.
 
-### Intermediate Layer
+- Flattens nested JSON fields from TMDB API responses  
+- Renames and casts columns into consistent formats  
+- Applies basic data quality checks (e.g., not null, accepted values)  
 
-The intermediate layer performs enrichment and data restructuring.
+Each source dataset (trending, details, credits) is transformed independently, preserving source-level granularity.
 
-- Trending data provides a list of `tmdb_id`
-- Additional datasets (details, credits) are joined and aggregated
-- Data is reshaped into analysis-ready structures
+### Intermediate Layer — Enrich and reshape data
 
-This layer bridges raw ingestion and final analytical models.
+The intermediate layer combines multiple datasets into enriched, analysis-ready structures.
 
-### Mart Layer
+- Uses `tmdb_id` from trending data as the primary join key  
+- Joins additional datasets (details, credits)  
+- Aggregates and reshapes data into unified representations  
 
-The mart layer defines business-facing models using dimensional modeling principles.
+This layer bridges raw ingestion and analytical models, making relationships between datasets explicit.
+
+### Mart Layer — Define analytical models
+
+The mart layer exposes business-facing models optimized for querying and reporting.
 
 - **dim_content**  
-  Consolidates core attributes of movies and TV shows
+  Consolidates core attributes of movies and TV shows  
 
 - **fct_trending_daily**  
-  Captures daily trending metrics such as popularity and vote counts
+  Captures daily trending metrics such as popularity and vote counts  
 
-These models are designed for analytical queries and reporting.
+These models follow dimensional modeling principles and are designed for analytical consumption.
 
 
-### Data Quality
+## Data Quality
 
-dbt tests are applied to ensure data integrity:
+Data quality is enforced using dbt tests applied at the transformation layer.
 
-- `not_null` constraints on key fields (e.g., tmdb_id)
-- Uniqueness checks on business keys
-- Basic integrity checks enforced through model relationships
+- Not null constraints on key fields (e.g., `tmdb_id`)  
+- Uniqueness checks on business keys  
+- Basic integrity checks through model relationships  
 
-Tests are defined alongside models and executed as part of the dbt run.
+Tests are defined alongside models and executed as part of the dbt pipeline.
 
 
 ## Key Design Decisions
 
-- **Replay Strategy**  
-  S3 is used as the source of truth for raw snapshots because the TMDB API does not support reliable historical retrieval. Past runs can only be reproduced from stored snapshots in S3.
+### 1. Persist raw snapshots as the source of truth
 
-- **Selective Enrichment**  
-  Additional datasets (details, credits) are fetched only for `tmdb_id` values not already present in S3, minimizing API usage and avoiding redundant ingestion.
+**Problem**  
+The TMDB API does not provide historical snapshots, making past data non-reproducible.
 
-- **Separation of Orchestration and Transformation**  
-  Airflow and dbt are executed in separate containers to isolate orchestration logic from transformation logic, enabling independent development and execution.
+**Decision**  
+Persist all raw API responses in S3 and treat them as immutable source data.
 
-- **Fail-Fast Reproducibility Guarantee**  
-  The pipeline fails when historical snapshots are missing, prioritizing correctness over silent data inconsistency.
+**Rationale**  
+This shifts reproducibility from the external API to the data platform itself.  
+All downstream processing is based on stored data rather than live API responses.
 
-- **Trade-off: Storage vs Reproducibility**  
-  Storing raw snapshots in S3 ensures reproducibility but increases storage requirements and requires lifecycle management.
+
+### 2. Fail fast when historical reproducibility cannot be guaranteed
+
+**Problem**  
+Re-running pipelines for past dates without stored snapshots would require re-fetching data from the API, which may no longer match the original result.
+
+**Decision**  
+If no snapshot exists for a past `logical_date`, the pipeline fails instead of attempting reconstruction.
+
+**Rationale**  
+This avoids silently producing inconsistent or misleading results and enforces strict reproducibility guarantees.
+
+
+### 3. Incremental enrichment to minimize API usage
+
+**Problem**  
+Fetching enrichment data (details, credits) for all records repeatedly would lead to unnecessary API calls and increased cost.
+
+**Decision**  
+Only fetch additional datasets for `tmdb_id` values not already present in S3.
+
+**Rationale**  
+This ensures efficient API usage while allowing the dataset to grow incrementally over time.
+
+
+### 4. Separate orchestration from transformation
+
+**Problem**  
+Coupling orchestration logic (Airflow) with transformation logic (SQL/dbt) leads to tightly bound systems that are harder to maintain and extend.
+
+**Decision**  
+Run dbt in a separate container and invoke it from Airflow only when needed.
+
+**Rationale**  
+This keeps responsibilities clearly separated and allows each layer to evolve independently without introducing unnecessary dependencies.
+
+
+
+## Limitations & Trade-offs
+
+### 1. Reproducibility depends on snapshot availability
+
+Reproducibility is only guaranteed after raw snapshots have been captured in S3.
+
+Data prior to the initial ingestion cannot be reconstructed, as the upstream API does not provide historical access.
+
+**Trade-off**  
+The system guarantees strong reproducibility going forward, but cannot recover data that was never captured.
+
+
+### 2. Increased storage cost due to raw data persistence
+
+Persisting all raw API responses in S3 ensures replayability but increases storage usage over time.
+
+**Trade-off**  
+The system favors reproducibility and auditability over storage efficiency.
+
+
+### 3. Batch-oriented design limits real-time capabilities
+
+The pipeline is designed around batch execution with Airflow and does not support real-time ingestion or streaming updates.
+
+**Trade-off**  
+The design remains simple and reproducible, but does not provide low-latency data updates.
+
+
+### 4. Upstream schema changes require explicit handling
+
+Changes in the TMDB API response structure (e.g., new fields, removed fields, schema shifts) are not automatically handled.
+
+**Trade-off**  
+The system avoids implicit assumptions and favors explicit schema management, at the cost of requiring manual updates when upstream changes occur.
+
 
 
 ## Project Structure
