@@ -204,3 +204,12 @@ docker ps | grep dbt
 docker exec -it <dbt-container-name> dbt run
 docker exec -it <dbt-container-name> dbt test
 ```
+
+## Future Work
+
+- Extend data quality framework with stronger validation (e.g., schema enforcement and completeness checks)  
+- Add monitoring and alerting for ingestion and transformation failures  
+- Expand enrichment pipeline with additional third-party data sources  
+- Introduce downstream consumers (e.g., BI dashboards or analytics applications)
+
+
