@@ -1,0 +1,36 @@
+version: 2
+
+models:
+  - name: dim_content
+    columns:
+      - name: tmdb_id
+        tests:
+          - not_null
+
+      - name: media_type
+        tests:
+          - not_null
+
+      - name: title
+        tests:
+          - not_null
+
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns:
+            - tmdb_id
+            - media_type
+
+  - name: fct_trending_daily
+    columns:
+      - name: trending_date
+        tests:
+          - not_null
+
+      - name: tmdb_id
+        tests:
+          - not_null
+
+      - name: media_type
+        tests:
+          - not_null

@@ -1,0 +1,110 @@
+version: 2
+
+models:
+  - name: stg_tmdb_trending
+    description: Flattened TMDB trending records from raw JSON payload
+    columns:
+      - name: trending_date
+        tests:
+          - not_null
+
+      - name: tmdb_id
+        tests:
+          - not_null
+
+      - name: title
+        tests:
+          - not_null
+
+      - name: media_type
+        tests:
+          - not_null
+
+      - name: time_window
+        tests:
+          - not_null
+
+  - name: stg_tmdb_details
+    description: Flattened TMDB details records for content enrichment
+    columns:
+      - name: tmdb_id
+        tests:
+          - not_null
+
+      - name: media_type
+        tests:
+          - not_null
+
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns:
+            - tmdb_id
+            - media_type
+
+  - name: stg_tmdb_details_genres
+    description: Flattened genre records from TMDB details payload
+    columns:
+      - name: tmdb_id
+        tests:
+          - not_null
+
+      - name: media_type
+        tests:
+          - not_null
+
+      - name: genre_id
+        tests:
+          - not_null
+
+      - name: genre_name
+        tests:
+          - not_null
+
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns:
+            - tmdb_id
+            - media_type
+            - genre_id
+
+  - name: stg_tmdb_credits_cast
+    description: Flattened cast records from TMDB credits payload
+    columns:
+      - name: tmdb_id
+        tests:
+          - not_null
+
+      - name: media_type
+        tests:
+          - not_null
+
+      - name: person_id
+        tests:
+          - not_null
+
+      - name: person_name
+        tests:
+          - not_null
+
+  - name: stg_tmdb_credits_crew
+    description: Flattened crew records from TMDB credits payload
+    columns:
+      - name: tmdb_id
+        tests:
+          - not_null
+
+      - name: media_type
+        tests:
+          - not_null
+
+      - name: person_id
+        tests:
+          - not_null
+
+      - name: person_name
+        tests:
+          - not_null
+
+      - name: job
+        tests:
+          - not_null

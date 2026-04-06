@@ -1,252 +1,207 @@
-# 🎥 TMDB Trending Data Pipeline (Snowflake + Airflow + dbt)
-
-**Tech Stack:** Python · Apache Airflow · Snowflake · Docker · TMDB API
-
-## Project Phases
-
-| Phase   | Description                                                          | Data Sources                             | Processing                                 | Key Focus                                                             |
-| ------- | -------------------------------------------------------------------- | ---------------------------------------- | ------------------------------------------ | --------------------------------------------------------------------- |
-| Phase 1 | Batch ETL pipeline for ingesting and transforming TMDB trending data | TMDB Trending API                        | Airflow + SQL                              | Pipeline orchestration, idempotent loads, medallion-style layering    |
-| Phase 2 | Multi-source analytics platform with modular data modeling using dbt | TMDB (Trending, Details, Credits) + IMDb | Airflow (ingestion) + dbt (transformation) | Analytics engineering, dimensional modeling, data contracts & testing |
+# TMDB Trending Data Pipeline (Airflow + Snowflake + dbt)
 
 ## Overview
 
-This project demonstrates the design and implementation of a production-style data pipeline that ingests daily trending movies and TV shows from the TMDB API and delivers analytics-ready tables in Snowflake.
+This project builds a reproducible data pipeline that ingests trending content from the TMDB API, stores immutable raw snapshots in S3, and transforms them into analytical datasets in Snowflake using dbt.
 
-The focus is on reliability under real-world constraints (API limitations),
-layered transformations, and idempotent delivery.
+Because the TMDB API does not provide historical snapshots for past dates, the pipeline uses S3 as the source of truth to ensure reproducibility.
 
-The resulting dataset captures daily popularity snapshots of content
-and supports trend and time-series analysis.
+It also supports multi-source enrichment by incrementally fetching additional datasets (details, credits) while minimizing unnecessary API calls.
 
-## Design Focus
+The design emphasizes reproducibility, idempotent ingestion, and clear separation between orchestration and transformation.
 
-This pipeline was built with real-world production considerations in mind:
-
-- Incremental ingestion under external API constraints
-- Idempotent transformations and upserts
-- Clear separation of RAW, STG, and DW layers
-- Built-in data quality checks and operational metrics for better observability
 
 ## Architecture
+![Architecture Overview](docs/architecture_overview.png)
 
-```mermaid
-flowchart LR
-    TMDB[TMDB Trending API]
+The pipeline is composed of three main components: Airflow for orchestration, S3 for raw data storage, and Snowflake for analytical processing, with dbt handling transformations within the warehouse.
 
-    subgraph Airflow["Apache Airflow"]
-        subgraph BOOT["Bootstrap DAG (one-time)"]
-            BOOT_DDL["Create Snowflake Objects (RAW, STG, DW)"]
-        end
+Airflow runs as a stateful orchestrator, managing scheduling, execution state, retries, and dependency resolution across the pipeline. It coordinates ingestion, replay logic, raw data loading, and triggers downstream transformation jobs.
 
-        subgraph PIPE["Pipeline DAG (daily)"]
-            FETCH[Fetch Trending Snapshot]
-            LOAD_RAW["Load RAW JSON (PUT and COPY)"]
-            STG_POP["Build STG Rows (DELETE then INSERT)"]
-            DQ[Data Quality Checks]
-            MERGE_DW[Merge into DW]
-            METRICS[Log Pipeline Metrics]
-        end
-    end
+dbt is executed in a separate, stateless container and is invoked only when transformations are required. This keeps transformation logic isolated from orchestration concerns and avoids coupling dbt dependencies to the Airflow runtime.
 
-    subgraph Snowflake["Snowflake"]
-        RAW[(RAW.TMDB_TRENDING_RAW)]
-        STG[(STG.TMDB_TRENDING_STG)]
-        DIM[(DW.DIM_CONTENT)]
-        FACT[(DW.FACT_TRENDING)]
-        METRIC_TBL[(DW.PIPELINE_METRICS)]
-    end
+S3 stores immutable raw snapshots and serves as the source of truth for replay, while Snowflake acts as the analytical warehouse where data is transformed via dbt.
 
-    %% Bootstrap
-    BOOT_DDL --> RAW
-    BOOT_DDL --> STG
-    BOOT_DDL --> DIM
-    BOOT_DDL --> FACT
-    BOOT_DDL --> METRIC_TBL
+This architecture enforces clear separation of concerns between orchestration, transformation, and storage, ensuring reproducibility, operational simplicity, and independent evolution of each component.
 
-    %% Daily pipeline
-    TMDB --> FETCH
-    FETCH --> LOAD_RAW
-    LOAD_RAW --> RAW
-
-    RAW --> STG_POP
-    STG_POP --> STG
-    STG --> DQ
-    DQ --> MERGE_DW
-
-    MERGE_DW --> DIM
-    MERGE_DW --> FACT
-
-    LOAD_RAW --> METRICS
-    STG_POP --> METRICS
-    MERGE_DW --> METRICS
-    METRICS --> METRIC_TBL
-
-```
-
-The pipeline is orchestrated by Airflow and follows a layered **RAW → STG → DW** design in Snowflake, with built-in data quality checks and operational metrics to ensure correctness and observability.
-
-> Airflow DAG with layered TaskGroups (RAW → STG → DW) and metric logging tasks
 
 ## Data Flow
+![Data Fow](docs/dataflow.png)
 
-### 1. Ingestion (RAW)
+The pipeline is orchestrated by Airflow and starts by checking whether a raw snapshot for the current `logical_date` already exists in S3.
 
-- Fetches the current TMDB trending snapshot
-- Stores the raw JSON payload without transformation
-- Loads data into Snowflake using PUT and COPY INTO
+This replay step is required because the TMDB trending API does not provide historical snapshots for past dates.
 
-### 2. Transformation (STG)
+The flow therefore follows three possible paths:
 
-- Flattens nested JSON arrays
-- Extracts and type-casts structured fields
-- Applies basic normalization
-- Enforces data quality constraints
+- If a raw snapshot already exists in S3, the pipeline reuses that snapshot and loads it into Snowflake.
+- If no snapshot exists and the `logical_date` is today, the pipeline fetches fresh trending data from the TMDB API, stores the raw payload in S3, and then loads it into Snowflake.
+- If no snapshot exists and the `logical_date` is in the past, the pipeline fails. Reproduction is only possible when a raw snapshot already exists in S3, which is treated as the source of truth.
 
-### 3. Analytics (DW)
+After the trending data is loaded, the pipeline extracts `tmdb_id` values and performs enrichment by fetching additional datasets such as details and credits.
 
-- Upserts content metadata into a dimension table
-- Maintains historical popularity metrics in a fact table
+Only IDs not already present in S3 are fetched, ensuring incremental enrichment while minimizing API usage.
 
-## Data Model
+Finally, dbt transforms the raw data in Snowflake into structured analytical models across the staging, intermediate, and mart layers, and applies tests to validate model integrity.
 
-### Raw Layer
 
-Stores the original API response as semi-structured JSON.
+## Data Modeling & Transformation
+![Data Lineage](docs/data-lineage.png)
 
-- Minimal processing with no business logic applied
-- Schema-on-read design
-- Replace-on-rerun semantics for the same date
+Transformations are implemented using dbt within Snowflake, following a layered modeling approach: staging → intermediate → marts.
 
-### STG Layer
+dbt transformations are triggered by Airflow only after all required raw datasets have been successfully loaded into Snowflake. This ensures that transformations always run on a complete and consistent set of inputs.
 
-Represents a cleaned, flattened view of the raw payload.
+#### Staging Layer
 
-- One row per `(trending_date, content, time_window)`
-- Handles schema normalization and validation
-- Designed to be fully reproducible for a given date
+The staging layer standardizes raw data loaded from Snowflake RAW tables.
 
-### DW Layer
+- Flattens semi-structured JSON fields from TMDB API responses
+- Renames and casts columns into consistent formats
+- Applies basic data quality checks (e.g., not null, accepted values)
 
-- `DIM_CONTENT` stores stable metadata for movies and TV shows
-- `FACT_TRENDING` stores daily popularity metrics for analytics and trend analysis
+Each source dataset (trending, details, credits) is transformed into its own staging model.
 
-## Orchestration & Reliability
+#### Intermediate Layer
 
-- Tasks are grouped by data layer (RAW / STG / DW)
-- Each task performs a single, clearly scoped responsibility
-- Failures prevent downstream execution to protect data correctness
+The intermediate layer performs enrichment and data restructuring.
 
-### Operational Metrics
+- Trending data provides a list of `tmdb_id`
+- Additional datasets (details, credits) are joined and aggregated
+- Data is reshaped into analysis-ready structures
 
-Each layer logs row counts and execution metadata into a metrics table, allowing:
+This layer bridges raw ingestion and final analytical models.
 
-- Detection of empty or partial loads
-- Monitoring of volume changes over time
-- Easier debugging during pipeline failures
+#### Mart Layer
 
-## Backfill & Idempotency
+The mart layer defines business-facing models using dimensional modeling principles.
 
-### API Backfill Constraint
+- **dim_content**  
+  Consolidates core attributes of movies and TV shows
 
-TMDB Trending API exposes **only the current popularity snapshot** and does not support historical queries.
+- **fct_trending_daily**  
+  Captures daily trending metrics such as popularity and vote counts
 
-#### Design decision
+These models are designed for analytical queries and reporting.
 
-- API ingestion is **explicitly skipped** for historical logical dates
-- This prevents writing incorrect or misleading historical data
 
-#### Implication
+### Data Quality
 
-- True API-level backfills are not possible
-- Historical reprocessing is limited to data already captured in the RAW layer
+dbt tests are applied to ensure data integrity:
 
-### Controlled Backfills
+- `not_null` constraints on key fields (e.g., tmdb_id)
+- Uniqueness checks on business keys
+- Consistency checks across datasets
 
-While the API cannot be backfilled, the pipeline still supports safe downstream reprocessing:
+Tests are defined alongside models and executed as part of the dbt run.
 
-- STG and DW layers can be re-built from existing RAW snapshots
-- Backfills are supported for RAW → STG → DW
-- Because raw API responses are preserved as immutable snapshots, downstream STG and DW layers can be safely reprocessed.
-  This allows schema evolution, transformation logic fixes, and data quality improvements to be applied retroactively without re-calling the external API.
 
-### Idempotent Data Delivery
+## Key Design Decisions
 
-To ensure safe re-runs and operational stability:
+- **Replay Strategy**  
+  S3 is used as the source of truth for raw snapshots because the TMDB API does not support reliable historical retrieval. Past runs can only be reproduced from stored snapshots in S3.
 
-- Data is partitioned by logical date
-- Transformations are deterministic
-- DW tables use `MERGE`-based upserts
+- **Selective Enrichment**  
+  Additional datasets (details, credits) are fetched only for `tmdb_id` values not already present in S3, minimizing API usage and avoiding redundant ingestion.
 
-As a result, re-running the pipeline for the same date does not create duplicates and produces consistent results.
+- **Separation of Orchestration and Transformation**  
+  Airflow and dbt are executed in separate containers to isolate orchestration logic from transformation logic, enabling independent development and execution.
 
-## How to Run
+- **Fail-Fast Reproducibility Guarantee**  
+  The pipeline fails when historical snapshots are missing, prioritizing correctness over silent data inconsistency.
 
-### Prerequisites
+- **Trade-off: Storage vs Reproducibility**  
+  Storing raw snapshots in S3 ensures reproducibility but increases storage requirements and requires lifecycle management.
 
-- Docker & Docker Compose
-- Snowflake account
-- TMDB API key
 
-### Set up
+## Project Structure
 
-#### Environment Variables
+```text
+.
+├── dags/                           # Airflow DAG definitions (workflow orchestration)
+│   ├── tmdb_ingestion_dag.py
+│   └── tmdb_transformation_dag.py
+│
+├── src/                            # Core application logic 
+│   ├── connector/                  # External system connectors (S3, Snowflake)                  
+│   │   ├── s3.py
+│   │   └── snowflake.py
+│   │
+│   ├── ingestion/              
+│   │   ├── load/
+│   │   │   └── snowflake_raw.py    # Handles S3 → Snowflake RAW loading
+│   │   ├── sql/                    # SQL templates for COPY INTO / ingestion
+│   │   │   ├── load_tmdb_trending.py
+│   │   │   ├── load_tmdb_details.py
+│   │   │   └── load_tmdb_credits.py
+│   │   └── tmdb/                   # TMDB API clients
+│   │       ├── client.py
+│   │       ├── credits.py
+│   │       ├── details.py
+│   │       └── trending.py
+│   └── tmdb_orchestration.py      # Coordinates ingestion workflows
+│
+├── dbt/                           # dbt project (transformation layer)
+│   └── tmdb_dbt/
+│       ├── models/
+│       │   ├── staging/
+│       │   │   ├── stg_tmdb_trending.sql
+│       │   │   ├── stg_tmdb_details.sql
+│       │   │   ├── stg_tmdb_details_genres.sql
+│       │   │   ├── stg_tmdb_credits_cast.sql
+│       │   │   └── stg_tmdb_credits_crew.sql
+│       │   ├── intermediate/
+│       │   │   ├── int_tmdb_credits_summary.sql
+│       │   │   └── int_tmdb_genres_summary.sql
+│       │   └── marts/
+│       │       ├── dim_content.sql
+│       │       └── fct_trending_daily.sql
+│       ├── dbt_project.yml
+│       └── profiles.yml
+│
+├── tests/                          # Local smoke / validation tests
+│
+├── docker-compose.yml              # Multi-container setup (Airflow, dbt, etc.)
+├── Dockerfile.airflow              # Airflow container image
+├── Dockerfile.dbt                  # dbt container image
+├── requirements-airflow.txt
+├── requirements-dbt.txt
+├── .env                            # Environment variables (not committed)
+└── README.md
 
-Runtime configuration is managed via a `.env` file.
-Create a `.env` file in the project root with the following variables:
-
-```env
-AIRFLOW_UID=
-AIRFLOW_PROJ_DIR=.
-_AIRFLOW_WWW_USER_USERNAME=
-_AIRFLOW_WWW_USER_PASSWORD=
-TMDB_API_KEY=
-TMDB_READ_ACCESS_TOKEN=
 ```
+The project is structured to clearly separate orchestration, ingestion, and transformation responsibilities.
 
-- `TMDB_API_KEY` is required for fetching trending data from the TMDB API.
-- Airflow-related variables are used only for local development.
+- **Airflow (`dags/`)** defines and schedules workflows, acting as the orchestration layer.
+- **Core logic (`src/`)** contains modular ingestion components, including API clients, data loaders, and system connectors.
+- **dbt (`dbt/`)** is fully isolated and handles all transformation logic inside Snowflake, including staging, intermediate models, and data marts.
+- **Docker** is used to containerize Airflow and dbt separately, ensuring environment consistency and clear separation of concerns.
 
-#### Snowflake Connection
+This structure allows each layer of the pipeline to be developed, tested, and operated independently.
 
-- Snowflake credentials are managed via an Airflow Connection
-  (`conn_id = snowflake_conn`) and are not stored in code or environment variables.
 
-### Start Local Airflow Environment
+## Getting Started
+To run the pipeline locally:
 
 ```bash
-make up
+git clone https://github.com/kngsoomin/tmdb-trending-data-pipeline
+cd tmdb-trending-data-pipeline
+
+
+# set environment variables
+cp .env.example .env
+
+# start services
+docker compose up -d
 ```
+Airflow UI is available at http://localhost:8081.
 
-### Initialize Database Objects
-
-Open http://localhost:8081 and run once:
-
+dbt transformations can be triggered via Airflow or executed manually:
 ```bash
-tmdb_trending_bootstrap
+# find dbt container name (e.g. *dbt*)
+docker ps | grep dbt
+
+# run dbt inside the container
+docker exec -it <dbt-container-name> dbt run
+docker exec -it <dbt-container-name> dbt test
 ```
-
-### Run the Pipeline
-
-Enable and trigger:
-
-```bash
-tmdb_trending_pipeline
-```
-
-## Testing
-
-Unit tests focus on deterministic and isolated behavior of the pipeline logic.
-
-- External API calls are mocked to avoid external dependencies
-- No Airflow scheduler or Snowflake connection is required
-
-This ensures fast, repeatable tests while keeping external systems outside the unit test boundary.
-
-Run tests locally:
-
-```bash
-make test
-```
-
-# tmdb-trending-data-pipeline

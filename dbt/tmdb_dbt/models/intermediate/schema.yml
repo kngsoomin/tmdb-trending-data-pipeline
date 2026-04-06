@@ -1,0 +1,40 @@
+version: 2
+
+models:
+  - name: int_tmdb_credits_summary
+    description: Credits summary by content with director and top-billed cast
+    columns:
+      - name: tmdb_id
+        tests:
+          - not_null
+
+      - name: media_type
+        tests:
+          - not_null
+
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns:
+            - tmdb_id
+            - media_type
+
+  - name: int_tmdb_genres_summary
+    description: Genre summary aggregated per content
+    columns:
+      - name: tmdb_id
+        tests:
+          - not_null
+
+      - name: media_type
+        tests:
+          - not_null
+
+      - name: genres
+        tests:
+          - not_null
+
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns:
+            - tmdb_id
+            - media_type
