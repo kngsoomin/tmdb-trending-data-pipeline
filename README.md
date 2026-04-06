@@ -1,12 +1,10 @@
 # TMDB Trending Data Pipeline (Airflow + Snowflake + dbt)
 
-## Overview
-
 This project builds a reproducible data pipeline that ingests trending content from the TMDB API, stores immutable raw snapshots in S3, and transforms them into analytical datasets in Snowflake using dbt.
 
 Because the TMDB API does not provide historical snapshots for past dates, the pipeline uses S3 as the source of truth to ensure reproducibility.
 
-It also supports multi-source enrichment by incrementally fetching additional datasets (details, credits) while minimizing unnecessary API calls.
+It also supports **multi-source enrichment** by incrementally fetching additional datasets (details, credits) while minimizing unnecessary API calls.
 
 The design emphasizes reproducibility, idempotent ingestion, and clear separation between orchestration and transformation.
 
@@ -14,12 +12,12 @@ The design emphasizes reproducibility, idempotent ingestion, and clear separatio
 ## Architecture
 ![Architecture Overview](docs/architecture_overview.png)
 
-The pipeline is composed of three main components: Airflow for orchestration, S3 for raw data storage, and Snowflake for analytical processing, with dbt handling transformations within the warehouse.
+The pipeline is composed of three main components: **Airflow for orchestration**, **S3 for raw data storage**, and **Snowflake for analytical processing**, with **dbt handling transformations** within the warehouse.
 
-Airflow runs as a stateful orchestrator, managing scheduling, execution state, retries, and dependency resolution across the pipeline. It coordinates ingestion, replay logic, raw data loading, and triggers downstream transformation jobs.
+Airflow runs as **a stateful orchestrator**, managing scheduling, execution state, retries, and dependency resolution across the pipeline. It coordinates ingestion, replay logic, raw data loading, and triggers downstream transformation jobs.
 
 
-dbt is executed in a separate, stateless container and is invoked only when transformations are required. This keeps transformation logic isolated from orchestration concerns and avoids coupling dbt dependencies to the Airflow runtime.
+dbt is executed in **a separate, stateless container** and is invoked only when transformations are required. This keeps transformation logic isolated from orchestration concerns and avoids coupling dbt dependencies to the Airflow runtime.
 
 S3 stores immutable raw snapshots and serves as the source of truth for replay, while Snowflake acts as the analytical warehouse where data is transformed via dbt.
 
@@ -31,7 +29,7 @@ This architecture enforces clear separation of concerns between orchestration, t
 
 The pipeline is orchestrated by Airflow and starts by checking whether a raw snapshot for the current `logical_date` already exists in S3.
 
-This replay step is required because the TMDB trending API does not provide historical snapshots for past dates.
+This replay step is required because the **TMDB trending API does not provide historical snapshots for past dates.**
 
 The flow therefore follows three possible paths:
 
@@ -49,11 +47,11 @@ Finally, dbt transforms the raw data in Snowflake into structured analytical mod
 ## Data Modeling & Transformation
 ![Data Lineage](docs/data-lineage.png)
 
-Transformations are implemented using dbt within Snowflake, following a layered modeling approach: staging → intermediate → marts.
+Transformations are implemented using dbt within Snowflake, following a layered modeling approach: **staging → intermediate → marts**.
 
 dbt transformations are triggered by Airflow only after all required raw datasets have been successfully loaded into Snowflake. This ensures that transformations always run on a complete and consistent set of inputs.
 
-#### Staging Layer
+### Staging Layer
 
 The staging layer standardizes raw data loaded from Snowflake RAW tables.
 
@@ -63,7 +61,7 @@ The staging layer standardizes raw data loaded from Snowflake RAW tables.
 
 Each source dataset (trending, details, credits) is transformed into its own staging model.
 
-#### Intermediate Layer
+### Intermediate Layer
 
 The intermediate layer performs enrichment and data restructuring.
 
@@ -73,7 +71,7 @@ The intermediate layer performs enrichment and data restructuring.
 
 This layer bridges raw ingestion and final analytical models.
 
-#### Mart Layer
+### Mart Layer
 
 The mart layer defines business-facing models using dimensional modeling principles.
 
@@ -92,7 +90,7 @@ dbt tests are applied to ensure data integrity:
 
 - `not_null` constraints on key fields (e.g., tmdb_id)
 - Uniqueness checks on business keys
-- Consistency checks across datasets
+- Basic integrity checks enforced through model relationships
 
 Tests are defined alongside models and executed as part of the dbt run.
 
