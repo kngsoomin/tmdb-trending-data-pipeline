@@ -128,52 +128,39 @@ Tests are defined alongside models and executed as part of the dbt pipeline.
 ## Key Design Decisions
 
 ### 1. Persist raw snapshots as the source of truth
-
-**Problem**  
-The TMDB API does not provide historical snapshots, making past data non-reproducible.
-
-**Decision**  
-Persist all raw API responses in S3 and treat them as immutable source data.
-
-**Rationale**  
-This shifts reproducibility from the external API to the data platform itself.  
-All downstream processing is based on stored data rather than live API responses.
+* **Problem** : The TMDB API does not provide historical snapshots, making past data non-reproducible.
+  
+* **Decision** : Persist all raw API responses in S3 and treat them as immutable source data.
+  
+* **Rationale** : This shifts reproducibility from the external API to the data platform itself.
+  All downstream processing is based on stored data rather than live API responses.
 
 
 ### 2. Fail fast when historical reproducibility cannot be guaranteed
 
-**Problem**  
-Re-running pipelines for past dates without stored snapshots would require re-fetching data from the API, which may no longer match the original result.
+* **Problem** : Re-running pipelines for past dates without stored snapshots would require re-fetching data from the API, which may no longer match the original result.
 
-**Decision**  
-If no snapshot exists for a past `logical_date`, the pipeline fails instead of attempting reconstruction.
+* **Decision** : If no snapshot exists for a past `logical_date`, the pipeline fails instead of attempting reconstruction.
 
-**Rationale**  
-This avoids silently producing inconsistent or misleading results and enforces strict reproducibility guarantees.
+* **Rationale** : This avoids silently producing inconsistent or misleading results and enforces strict reproducibility guarantees.
 
 
 ### 3. Incremental enrichment to minimize API usage
 
-**Problem**  
-Fetching enrichment data (details, credits) for all records repeatedly would lead to unnecessary API calls and increased cost.
+* **Problem** : Fetching enrichment data (details, credits) for all records repeatedly would lead to unnecessary API calls and increased cost.
 
-**Decision**  
-Only fetch additional datasets for `tmdb_id` values not already present in S3.
+* **Decision** : Only fetch additional datasets for `tmdb_id` values not already present in S3.
 
-**Rationale**  
-This ensures efficient API usage while allowing the dataset to grow incrementally over time.
+* **Rationale** : This ensures efficient API usage while allowing the dataset to grow incrementally over time.
 
 
 ### 4. Separate orchestration from transformation
 
-**Problem**  
-Coupling orchestration logic (Airflow) with transformation logic (SQL/dbt) leads to tightly bound systems that are harder to maintain and extend.
+* **Problem** : Coupling orchestration logic (Airflow) with transformation logic (SQL/dbt) leads to tightly bound systems that are harder to maintain and extend.
 
-**Decision**  
-Run dbt in a separate container and invoke it from Airflow only when needed.
+* **Decision** : Run dbt in a separate container and invoke it from Airflow only when needed.
 
-**Rationale**  
-This keeps responsibilities clearly separated and allows each layer to evolve independently without introducing unnecessary dependencies.
+* **Rationale** : This keeps responsibilities clearly separated and allows each layer to evolve independently without introducing unnecessary dependencies.
 
 
 
@@ -185,32 +172,28 @@ Reproducibility is only guaranteed after raw snapshots have been captured in S3.
 
 Data prior to the initial ingestion cannot be reconstructed, as the upstream API does not provide historical access.
 
-**Trade-off**  
-The system guarantees strong reproducibility going forward, but cannot recover data that was never captured.
+**Trade-off** : The system guarantees strong reproducibility going forward, but cannot recover data that was never captured.
 
 
 ### 2. Increased storage cost due to raw data persistence
 
 Persisting all raw API responses in S3 ensures replayability but increases storage usage over time.
 
-**Trade-off**  
-The system favors reproducibility and auditability over storage efficiency.
+**Trade-off** : The system favors reproducibility and auditability over storage efficiency.
 
 
 ### 3. Batch-oriented design limits real-time capabilities
 
 The pipeline is designed around batch execution with Airflow and does not support real-time ingestion or streaming updates.
 
-**Trade-off**  
-The design remains simple and reproducible, but does not provide low-latency data updates.
+**Trade-off** : The design remains simple and reproducible, but does not provide low-latency data updates.
 
 
 ### 4. Upstream schema changes require explicit handling
 
 Changes in the TMDB API response structure (e.g., new fields, removed fields, schema shifts) are not automatically handled.
 
-**Trade-off**  
-The system avoids implicit assumptions and favors explicit schema management, at the cost of requiring manual updates when upstream changes occur.
+**Trade-off** : The system avoids implicit assumptions and favors explicit schema management, at the cost of requiring manual updates when upstream changes occur.
 
 
 
